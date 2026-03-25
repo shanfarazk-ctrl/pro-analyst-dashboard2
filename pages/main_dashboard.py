@@ -177,6 +177,15 @@ def render_dashboard():
         _render_landing()
         return
 
+    # Show warning if demo data is being used
+    if company_data.get("is_demo"):
+        st.warning(
+            "⚠️ **Demo Data Mode** — Real API data unavailable. "
+            "Add `FMP_API_KEY` to Streamlit Cloud secrets for live financial data. "
+            "[View Setup Guide →](https://share.streamlit.io/app)",
+            icon="🔑"
+        )
+
     profile   = company_data.get("profile", {})
     kpis      = company_data.get("kpis", [])
     mkt       = company_data.get("market_data", {})

@@ -116,16 +116,20 @@ def area_trend(kpis: list[dict], metrics: list[tuple], title: str = "", height: 
         ))
     return fig
 
-def bar_chart(kpis: list[dict], metrics: list[tuple], title: str = "", height: int = 280) -> go.Figure:
+def bar_chart(kpis: list[dict], metrics: list[tuple], title: str = "", height: int = 280, reference_lines: list = None) -> go.Figure:
     """Grouped bar chart."""
     fig = _base_fig(title=dict(text=title, font=dict(size=13, color="rgba(255,255,255,0.6)"), x=0), height=height, barmode="group")
-    years = [k["year"] for k in kpis]
+    years = [k.get("year", 0) for k in kpis]
     for key, label, color in metrics:
-        vals = [k.get(key, 0) for k in kpis]
+        vals = [(k.get(key) or 0) for k in kpis]
         fig.add_trace(go.Bar(
             x=years, y=vals, name=label,
             marker=dict(color=color, opacity=0.85, line=dict(width=0)),
         ))
+    if reference_lines:
+        for y_val, label, color in reference_lines:
+            fig.add_hline(y=y_val, line=dict(color=color, width=1, dash="dot"),
+                         annotation=dict(text=label, font=dict(size=9, color=color), x=1))
     fig.update_traces(marker_cornerradius=4)
     return fig
 

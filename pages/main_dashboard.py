@@ -177,16 +177,27 @@ def render_dashboard():
         _render_landing()
         return
 
-    # Show warning if demo data is being used
-    if company_data.get("is_demo"):
+    source = company_data.get("source", "unknown")
+    source_msg = {
+        "fmp": "✅ Live data from FMP is active.",
+        "yfinance": "✅ Live data from Yahoo Finance is active (may be rate-limited).",
+        "demo": "⚠️ Demo Data Mode — Fallback test data is active.",
+    }.get(source, f"ℹ️ Data source: {source}")
+
+    if source == "demo" or company_data.get("is_demo"):
         st.warning(
-            "⚠️ **Demo Data Mode** — Real API data unavailable. "
-            "Add `FMP_API_KEY` to Streamlit Cloud secrets for live financial data. "
-            "[View Setup Guide →](https://share.streamlit.io/app)",
+            f"{source_msg} Add `FMP_API_KEY` to Streamlit Cloud secrets for live data. View Setup Guide →",
             icon="🔑"
         )
+    elif source in ["fmp", "yfinance"]:
+        st.success(source_msg)
+    else:
+        st.info(source_msg)
 
-    profile   = company_data.get("profile", {})
+    if company_data.get("error"):
+        st.caption(f"Fetch log: {company_data.get('error')}")
+
+    profile = company_data.get("profile", {})
     kpis      = company_data.get("kpis", [])
     mkt       = company_data.get("market_data", {})
     is_private = company_data.get("source") == "upload"

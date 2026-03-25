@@ -149,9 +149,13 @@ class DataFetcher:
             stock = yf.Ticker(yt)
             info  = stock.info
 
+            # Fail early when yfinance returns empty/invalid metadata
+            if not info or (not info.get("longName") and not info.get("regularMarketPrice") and not info.get("shortName")):
+                raise ValueError(f"No valid data from Yahoo Finance for ticker: {yt}")
+
             # Company profile
             result["profile"] = {
-                "name":         info.get("longName", ticker),
+                "name":         info.get("longName", info.get("shortName", ticker)),
                 "sector":       info.get("sector", "Unknown"),
                 "industry":     info.get("industry", "Unknown"),
                 "country":      info.get("country", ""),
@@ -383,7 +387,12 @@ class DataFetcher:
             headers = {"apikey": self.fmp_key}
             profile_url = f"{FMP_BASE}/profile/{ticker}?apikey={self.fmp_key}"
             r = requests.get(profile_url, timeout=10)
-            profiles = r.json()
+            try:
+                profiles = r.json()
+            except ValueError as json_err:
+                fallback["error"] = f"FMP JSON parse error: {json_err} (HTTP {r.status_code})"
+                return fallback
+
             if profiles:
                 p = profiles[0]
                 fallback["profile"] = fallback.get("profile", {})

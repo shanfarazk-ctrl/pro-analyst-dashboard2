@@ -50,18 +50,69 @@ def _base_fig(**kwargs):
     return fig
 
 # ─── REVENUE / EBITDA TREND ───────────────────────────────────────────────────
+def _normalize_fillcolor(color: str, alpha: float = 0.08) -> str:
+    """Normalize area fill color into a valid rgba string."""
+    if not color or not isinstance(color, str):
+        return f"rgba(255,255,255,{alpha})"
+
+    color = color.strip()
+    if color.startswith("#"):
+        # Convert hex (#RRGGBB) to rgba
+        try:
+            hex_value = color.lstrip("#")
+            if len(hex_value) == 6:
+                r = int(hex_value[0:2], 16)
+                g = int(hex_value[2:4], 16)
+                b = int(hex_value[4:6], 16)
+                return f"rgba({r},{g},{b},{alpha})"
+            elif len(hex_value) == 8:
+                r = int(hex_value[0:2], 16)
+                g = int(hex_value[2:4], 16)
+                b = int(hex_value[4:6], 16)
+                a = int(hex_value[6:8], 16) / 255
+                return f"rgba({r},{g},{b},{max(0,min(1,a*alpha))})"
+        except Exception:
+            return f"rgba(255,255,255,{alpha})"
+
+    if color.startswith("rgba"):
+        # Accept existing rgba value, enforce provided alpha if desired
+        parts = color[color.find("(")+1:color.find(")")].split(",")
+        if len(parts) >= 3:
+            try:
+                r = int(parts[0])
+                g = int(parts[1])
+                b = int(parts[2])
+                return f"rgba({r},{g},{b},{alpha})"
+            except Exception:
+                return f"rgba(255,255,255,{alpha})"
+
+    if color.startswith("rgb"):
+        parts = color[color.find("(")+1:color.find(")")].split(",")
+        if len(parts) >= 3:
+            try:
+                r = int(parts[0])
+                g = int(parts[1])
+                b = int(parts[2])
+                return f"rgba({r},{g},{b},{alpha})"
+            except Exception:
+                return f"rgba(255,255,255,{alpha})"
+
+    return f"rgba(255,255,255,{alpha})"
+
+
 def area_trend(kpis: list[dict], metrics: list[tuple], title: str = "", height: int = 280) -> go.Figure:
     """Area chart for trend data."""
     fig = _base_fig(title=dict(text=title, font=dict(size=13, color="rgba(255,255,255,0.6)"), x=0), height=height)
-    years = [k["year"] for k in kpis]
+    years = [k.get("year", 0) for k in kpis]
     for i, (key, label, color) in enumerate(metrics):
-        vals = [k.get(key, 0) for k in kpis]
+        vals = [(k.get(key) or 0) for k in kpis]
+        fillcolor = _normalize_fillcolor(color, 0.08)
         fig.add_trace(go.Scatter(
             x=years, y=vals, name=label, mode="lines+markers",
             line=dict(color=color, width=2.5),
             marker=dict(size=5, color=color),
             fill="tozeroy" if i == 0 else "tonexty",
-            fillcolor=color.replace(")", ", 0.08)").replace("rgb(", "rgba(") if "rgb" in color else f"{color}14",
+            fillcolor=fillcolor,
         ))
     return fig
 

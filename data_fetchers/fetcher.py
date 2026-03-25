@@ -150,8 +150,19 @@ class DataFetcher:
             try:
                 stock = yf.Ticker(yt)
                 info = stock.info
+                
+                # If .info is empty, try to get data from history as validation
                 if not info or (not info.get("longName") and not info.get("regularMarketPrice") and not info.get("shortName")):
-                    raise ValueError(f"No valid metadata from Yahoo Finance for ticker {yt}")
+                    # Try to fetch history as fallback validation
+                    hist = stock.history(period="1d")
+                    if hist.empty:
+                        raise ValueError(f"No valid data from Yahoo Finance for ticker {yt}")
+                    # If history exists, info dict might be loading, retry once more
+                    info = stock.info or {}
+                    if not info.get("longName") and not info.get("shortName"):
+                        info["longName"] = yt
+                        info["shortName"] = yt
+                
                 return yt, stock, info
             except Exception as e:
                 last_err = e
@@ -425,38 +436,59 @@ class DataFetcher:
     def _fetch_fmp(self, ticker: str, exchange: str, years: int, fallback: dict) -> dict:
         """Supplement with FMP data if available."""
         try:
-            profile_url = f"{FMP_BASE}/profile/{ticker}?apikey={self.fmp_key}"
-            r = requests.get(profile_url, timeout=10)
-            try:
-                profiles = r.json()
-            except ValueError as json_err:
-                fallback["error"] = f"FMP JSON parse error: {json_err} (HTTP {r.status_code})"
+            # For US stocks, use plain ticker; for others, try with suffix
+            fmp_tickers = [ticker.upper().strip()]
+            if exchange not in ["NYSE", "NASDAQ", "SP500"]:
+                suffix = EXCHANGE_SUFFIX.get(exchange, "")
+                if suffix:
+                    fmp_tickers.insert(0, ticker.upper().strip() + suffix)
+            
+            profile_data = None
+            fmp_ticker_used = None
+            
+            # Try each ticker format
+            for fmp_ticker in fmp_tickers:
+                try:
+                    profile_url = f"{FMP_BASE}/profile/{fmp_ticker}?apikey={self.fmp_key}"
+                    r = requests.get(profile_url, timeout=10)
+                    if r.status_code != 200:
+                        continue
+                    try:
+                        profiles = r.json()
+                    except ValueError:
+                        continue
+                    
+                    if profiles and isinstance(profiles, list) and len(profiles) > 0:
+                        profile_data = profiles[0]
+                        fmp_ticker_used = fmp_ticker
+                        break
+                except Exception:
+                    continue
+            
+            if not profile_data:
+                fallback["error"] = f"FMP profile unavailable for {ticker} (tried: {fmp_tickers})"
                 fallback["success"] = False
                 return fallback
 
-            if not profiles or not isinstance(profiles, list):
-                fallback["error"] = f"FMP profile unavailable for {ticker}"
-                fallback["success"] = False
-                return fallback
-
-            p = profiles[0]
             fallback["profile"] = fallback.get("profile", {})
             fallback["profile"].update({
-                "name": p.get("companyName", ticker),
-                "sector": p.get("sector", "Unknown"),
-                "industry": p.get("industry", "Unknown"),
-                "country": p.get("country", ""),
-                "currency": p.get("currency", "USD"),
-                "description": p.get("description", ""),
-                "market_cap": p.get("mktCap", 0),
-                "share_price": p.get("price", 0),
-                "beta": p.get("beta", 1.0),
+                "name": profile_data.get("companyName", ticker),
+                "sector": profile_data.get("sector", "Unknown"),
+                "industry": profile_data.get("industry", "Unknown"),
+                "country": profile_data.get("country", ""),
+                "currency": profile_data.get("currency", "USD"),
+                "description": profile_data.get("description", ""),
+                "market_cap": profile_data.get("mktCap", 0),
+                "share_price": profile_data.get("price", 0),
+                "beta": profile_data.get("beta", 1.0),
             })
 
             def get_statement(stmt_name):
                 try:
-                    url = f"{FMP_BASE}/{stmt_name}/{ticker}?period=annual&limit={years}&apikey={self.fmp_key}"
+                    url = f"{FMP_BASE}/{stmt_name}/{fmp_ticker_used}?period=annual&limit={years}&apikey={self.fmp_key}"
                     rr = requests.get(url, timeout=10)
+                    if rr.status_code != 200:
+                        return []
                     data = rr.json()
                     return data if isinstance(data, list) else []
                 except Exception:

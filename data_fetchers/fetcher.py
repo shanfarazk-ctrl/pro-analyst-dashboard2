@@ -133,6 +133,32 @@ class DataFetcher:
             pass
         return results
 
+    def _fetch_yfinance(_self, ticker: str, exchange: str):
+        candidates = []
+        clean_ticker = ticker.upper().strip()
+
+        if exchange in ["NYSE", "NASDAQ", "SP500"]:
+            candidates.append(clean_ticker)
+        else:
+            suffix = EXCHANGE_SUFFIX.get(exchange, "")
+            if suffix and not clean_ticker.endswith(suffix):
+                candidates.append(clean_ticker + suffix)
+            candidates.append(clean_ticker)
+
+        last_err = None
+        for yt in candidates:
+            try:
+                stock = yf.Ticker(yt)
+                info = stock.info
+                if not info or (not info.get("longName") and not info.get("regularMarketPrice") and not info.get("shortName")):
+                    raise ValueError(f"No valid metadata from Yahoo Finance for ticker {yt}")
+                return yt, stock, info
+            except Exception as e:
+                last_err = e
+                continue
+
+        raise ValueError(f"Yahoo Finance fetch failed for {ticker} ({exchange}), tried: {candidates}. Last error: {last_err}")
+
     # ── CORE FINANCIAL DATA ───────────────────────────────────────────────────
     @st.cache_data(ttl=3600, show_spinner=False)
     def fetch_company_data(_self, ticker: str, exchange: str, years: int = 5) -> dict:
@@ -142,16 +168,12 @@ class DataFetcher:
         if cached:
             return cached
 
-        yt = ticker if exchange in ["NYSE", "NASDAQ", "SP500"] else _self.build_ticker(ticker, exchange)
-        result = {"ticker": ticker, "exchange": exchange, "yf_ticker": yt, "source": "yfinance"}
+        result = {"ticker": ticker, "exchange": exchange, "source": "yfinance"}
 
+        # Try yfinance first with fallback tickers
         try:
-            stock = yf.Ticker(yt)
-            info  = stock.info
-
-            # Fail early when yfinance returns empty/invalid metadata
-            if not info or (not info.get("longName") and not info.get("regularMarketPrice") and not info.get("shortName")):
-                raise ValueError(f"No valid data from Yahoo Finance for ticker: {yt}")
+            yt, stock, info = _self._fetch_yfinance(ticker, exchange)
+            result.update({"yf_ticker": yt, "source": "yfinance"})
 
             # Company profile
             result["profile"] = {
@@ -204,12 +226,15 @@ class DataFetcher:
             result["success"]       = True
 
         except Exception as e:
-            result["error"]   = str(e)
+            result["error"]   = f"yfinance: {str(e)}"
             result["success"] = False
 
         # Try FMP as supplement / override if key available
         if _self.fmp_key and not result.get("success"):
             result = _self._fetch_fmp(ticker, exchange, years, result)
+
+        if not result.get("success") and not result.get("error"):
+            result["error"] = "Unable to fetch data from yfinance and FMP. Please check ticker and API keys."
 
         _self._cache_set(cache_key, result)
         return result

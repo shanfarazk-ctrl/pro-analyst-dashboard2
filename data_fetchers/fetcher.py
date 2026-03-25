@@ -76,12 +76,30 @@ class DataFetcher:
 
     def _cache_get(self, key):
         item = self._cache.get(key)
-        if item and time.time() - item["ts"] < 3600:
+        if item and time.time() - item["ts"] < 21600:  # 6-hour cache to reduce API calls
             return item["data"]
         return None
 
     def _cache_set(self, key, data):
         self._cache[key] = {"data": data, "ts": time.time()}
+    
+    def _safe_request(self, url: str, max_retries: int = 3) -> Optional[requests.Response]:
+        """Make HTTP request with exponential backoff for rate limiting."""
+        for attempt in range(max_retries):
+            try:
+                r = requests.get(url, timeout=10)
+                if r.status_code == 429:  # Rate limited
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt)  # 1s, 2s, 4s exponential backoff
+                        time.sleep(wait_time)
+                        continue
+                return r
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
+        return None
 
     def build_ticker(self, ticker: str, exchange: str) -> str:
         """Append Yahoo Finance exchange suffix."""
@@ -171,7 +189,7 @@ class DataFetcher:
         raise ValueError(f"Yahoo Finance fetch failed for {ticker} ({exchange}), tried: {candidates}. Last error: {last_err}")
 
     # ── CORE FINANCIAL DATA ───────────────────────────────────────────────────
-    @st.cache_data(ttl=3600, show_spinner=False)
+    @st.cache_data(ttl=21600, show_spinner=False)  # 6-hour cache to reduce API rate limiting
     def fetch_company_data(_self, ticker: str, exchange: str, years: int = 5) -> dict:
         """Fetch complete company financial data."""
         cache_key = f"{ticker}_{exchange}_{years}"
@@ -251,8 +269,9 @@ class DataFetcher:
             result["error"] = f"yfinance: {yf_error}"
             result["success"] = False
 
-        # Try FMP as supplement / override if key available
+        # Try FMP as supplement / override if key available and yfinance failed
         if not result.get("success") and _self.fmp_key:
+            time.sleep(1)  # Brief delay to avoid API hammering
             fmp_result = _self._fetch_fmp(ticker, exchange, years, {"ticker": ticker, "exchange": exchange, "source": "fmp"})
             if fmp_result.get("success"):
                 _self._cache_set(cache_key, fmp_result)
@@ -446,12 +465,12 @@ class DataFetcher:
             profile_data = None
             fmp_ticker_used = None
             
-            # Try each ticker format
+            # Try each ticker format with retry logic
             for fmp_ticker in fmp_tickers:
                 try:
                     profile_url = f"{FMP_BASE}/profile/{fmp_ticker}?apikey={self.fmp_key}"
-                    r = requests.get(profile_url, timeout=10)
-                    if r.status_code != 200:
+                    r = self._safe_request(profile_url)  # Use safe request with backoff
+                    if r is None or r.status_code != 200:
                         continue
                     try:
                         profiles = r.json()
@@ -486,8 +505,8 @@ class DataFetcher:
             def get_statement(stmt_name):
                 try:
                     url = f"{FMP_BASE}/{stmt_name}/{fmp_ticker_used}?period=annual&limit={years}&apikey={self.fmp_key}"
-                    rr = requests.get(url, timeout=10)
-                    if rr.status_code != 200:
+                    rr = self._safe_request(url)
+                    if rr is None or rr.status_code != 200:
                         return []
                     data = rr.json()
                     return data if isinstance(data, list) else []

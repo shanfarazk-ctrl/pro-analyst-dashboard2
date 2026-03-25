@@ -456,7 +456,7 @@ def render_dashboard():
                 ("roe",           "ROE",           "%", True, c2),
                 ("debt_ebitda",   "Debt/EBITDA",   "x", False, c3),
             ]
-            for key, label, unit, higher_better, col:
+            for key, label, unit, higher_better, col in chart_metrics:
                 vals = []
                 names = []
                 for d in all_companies:

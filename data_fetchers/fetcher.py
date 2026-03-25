@@ -168,9 +168,19 @@ class DataFetcher:
         if cached:
             return cached
 
+        # Try FMP first if key is configured
+        if _self.fmp_key:
+            fmp_result = _self._fetch_fmp(ticker, exchange, years, {"ticker": ticker, "exchange": exchange, "source": "fmp"})
+            if fmp_result.get("success"):
+                _self._cache_set(cache_key, fmp_result)
+                return fmp_result
+            fmp_error = fmp_result.get("error")
+        else:
+            fmp_error = "FMP API key not provided"
+
         result = {"ticker": ticker, "exchange": exchange, "source": "yfinance"}
 
-        # Try yfinance first with fallback tickers
+        # Try yfinance with fallback tickers
         try:
             yt, stock, info = _self._fetch_yfinance(ticker, exchange)
             result.update({"yf_ticker": yt, "source": "yfinance"})
@@ -226,12 +236,18 @@ class DataFetcher:
             result["success"]       = True
 
         except Exception as e:
-            result["error"]   = f"yfinance: {str(e)}"
+            yf_error = str(e)
+            result["error"] = f"yfinance: {yf_error}"
             result["success"] = False
 
         # Try FMP as supplement / override if key available
-        if _self.fmp_key and not result.get("success"):
-            result = _self._fetch_fmp(ticker, exchange, years, result)
+        if not result.get("success") and _self.fmp_key:
+            fmp_result = _self._fetch_fmp(ticker, exchange, years, {"ticker": ticker, "exchange": exchange, "source": "fmp"})
+            if fmp_result.get("success"):
+                _self._cache_set(cache_key, fmp_result)
+                return fmp_result
+            result["error"] = f"yfinance: {yf_error}; fmp: {fmp_result.get('error', 'unknown')}"
+            result["success"] = False
 
         if not result.get("success") and not result.get("error"):
             result["error"] = "Unable to fetch data from yfinance and FMP. Please check ticker and API keys."
@@ -409,32 +425,106 @@ class DataFetcher:
     def _fetch_fmp(self, ticker: str, exchange: str, years: int, fallback: dict) -> dict:
         """Supplement with FMP data if available."""
         try:
-            headers = {"apikey": self.fmp_key}
             profile_url = f"{FMP_BASE}/profile/{ticker}?apikey={self.fmp_key}"
             r = requests.get(profile_url, timeout=10)
             try:
                 profiles = r.json()
             except ValueError as json_err:
                 fallback["error"] = f"FMP JSON parse error: {json_err} (HTTP {r.status_code})"
+                fallback["success"] = False
                 return fallback
 
-            if profiles:
-                p = profiles[0]
-                fallback["profile"] = fallback.get("profile", {})
-                fallback["profile"].update({
-                    "name": p.get("companyName", ticker),
-                    "sector": p.get("sector", ""),
-                    "industry": p.get("industry", ""),
-                    "country": p.get("country", ""),
-                    "currency": p.get("currency", "USD"),
-                    "description": p.get("description", ""),
-                    "market_cap": p.get("mktCap", 0),
-                    "share_price": p.get("price", 0),
-                    "beta": p.get("beta", 1.0),
-                })
+            if not profiles or not isinstance(profiles, list):
+                fallback["error"] = f"FMP profile unavailable for {ticker}"
+                fallback["success"] = False
+                return fallback
+
+            p = profiles[0]
+            fallback["profile"] = fallback.get("profile", {})
+            fallback["profile"].update({
+                "name": p.get("companyName", ticker),
+                "sector": p.get("sector", "Unknown"),
+                "industry": p.get("industry", "Unknown"),
+                "country": p.get("country", ""),
+                "currency": p.get("currency", "USD"),
+                "description": p.get("description", ""),
+                "market_cap": p.get("mktCap", 0),
+                "share_price": p.get("price", 0),
+                "beta": p.get("beta", 1.0),
+            })
+
+            def get_statement(stmt_name):
+                try:
+                    url = f"{FMP_BASE}/{stmt_name}/{ticker}?period=annual&limit={years}&apikey={self.fmp_key}"
+                    rr = requests.get(url, timeout=10)
+                    data = rr.json()
+                    return data if isinstance(data, list) else []
+                except Exception:
+                    return []
+
+            income_raw = get_statement("income-statement")
+            balance_raw = get_statement("balance-sheet-statement")
+            cashflow_raw = get_statement("cash-flow-statement")
+
+            def map_income(row):
+                return {
+                    "year": int(str(row.get("calendarYear", "0"))[:4]) if row.get("calendarYear") else None,
+                    "revenue": row.get("revenue", 0),
+                    "cogs": row.get("costOfRevenue", 0),
+                    "gross_profit": row.get("grossProfit", 0),
+                    "ebitda": row.get("ebitda", 0),
+                    "ebit": row.get("ebit", 0),
+                    "net_income": row.get("netIncome", 0),
+                    "interest_expense": abs(row.get("interestExpense", 0) or 0),
+                    "tax_expense": abs(row.get("incomeTaxExpense", 0) or 0),
+                    "depreciation": row.get("depreciationAndAmortization", 0),
+                }
+
+            def map_balance(row):
+                debt = row.get("totalDebt", 0) or (row.get("longTermDebt", 0) or 0) + (row.get("shortTermDebt", 0) or 0)
+                return {
+                    "year": int(str(row.get("calendarYear", "0"))[:4]) if row.get("calendarYear") else None,
+                    "total_assets": row.get("totalAssets", 0),
+                    "total_equity": row.get("totalStockholdersEquity", 0),
+                    "debt": debt,
+                    "long_term_debt": row.get("longTermDebt", 0),
+                    "cash": row.get("cashAndCashEquivalents", 0),
+                    "current_assets": row.get("totalCurrentAssets", 0),
+                    "current_liabilities": row.get("totalCurrentLiabilities", 1),
+                    "inventory": row.get("inventory", 0),
+                    "receivables": row.get("netReceivables", 0),
+                    "payables": row.get("accountsPayable", 0),
+                }
+
+            def map_cashflow(row):
+                return {
+                    "year": int(str(row.get("calendarYear", "0"))[:4]) if row.get("calendarYear") else None,
+                    "cfo": row.get("netCashProvidedByOperatingActivities", 0),
+                    "capex": abs(row.get("capitalExpenditures", 0) or 0),
+                    "fcf": row.get("freeCashFlow", 0),
+                }
+
+            fallback["income"] = [map_income(x) for x in income_raw if x.get("calendarYear")][:years]
+            fallback["balance_sheet"] = [map_balance(x) for x in balance_raw if x.get("calendarYear")][:years]
+            fallback["cashflow"] = [map_cashflow(x) for x in cashflow_raw if x.get("calendarYear")][:years]
+
+            if fallback["income"] and fallback["balance_sheet"] and fallback["cashflow"]:
+                fallback["kpis"] = self._calc_kpis(fallback)
+                fallback["market_data"] = {
+                    "share_price": fallback["profile"].get("share_price", 0),
+                    "market_cap": fallback["profile"].get("market_cap", 0),
+                    "pe": fallback["profile"].get("pe", 0),
+                    "pb": fallback["profile"].get("pb", 0),
+                }
                 fallback["success"] = True
-        except Exception:
-            pass
+            else:
+                fallback["success"] = False
+                fallback["error"] = fallback.get("error", "Incomplete FMP financials")
+
+        except Exception as ex:
+            fallback["error"] = f"FMP fallback failed: {ex}"
+            fallback["success"] = False
+
         return fallback
 
     # ── MACRO DATA ────────────────────────────────────────────────────────────

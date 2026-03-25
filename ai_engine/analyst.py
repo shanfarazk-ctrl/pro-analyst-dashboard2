@@ -198,7 +198,17 @@ REQUIRED OUTPUT — Use exact markdown headers below
 ## ⚙️ Efficiency & Working Capital
 [Asset utilization. CCC trend. Receivable/inventory management. Operational execution quality vs peers.]
 
-{"## 💎 Valuation Analysis\n[P/E, EV/EBITDA vs peers and sector. Historical valuation band context. Implied upside/downside. Premium or discount justified?]" if not is_private else "## 💎 Value Assessment (Private)\n[Internal rate of return potential. EV/EBITDA implied range based on peers. EBITDA-based valuation estimate.]"}
+"""
+        
+        # Build valuation section based on whether private or public
+        if is_private:
+            valuation_section = """## 💎 Value Assessment (Private)
+[Internal rate of return potential. EV/EBITDA implied range based on peers. EBITDA-based valuation estimate.]"""
+        else:
+            valuation_section = """## 💎 Valuation Analysis
+[P/E, EV/EBITDA vs peers and sector. Historical valuation band context. Implied upside/downside. Premium or discount justified?]"""
+        
+        user_prompt += valuation_section + """
 
 ## 🌍 Macro & Micro-Economic Risk Analysis
 [This section is critical. Cover:]

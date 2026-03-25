@@ -77,6 +77,7 @@ def render_sidebar():
         if is_private:
             st.markdown("#### 📤 Upload Financial Data")
             st.markdown('<div style="font-size:11px; color:rgba(255,255,255,0.4);">Upload Excel/CSV with Income Statement, Balance Sheet & Cash Flow in rows</div>', unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:10px; color:rgba(255,255,255,0.35);'>Debug: FMP key present = {bool(get_fetcher().fmp_key)}; Alpha Vantage key present = {bool(get_fetcher().av_key)}</div>", unsafe_allow_html=True)
             uploaded = st.file_uploader("", type=["xlsx", "csv", "xls"], label_visibility="collapsed")
             company_name_input = st.text_input("Company Name", placeholder="e.g. Acme Industries")
             industry_input     = st.selectbox("Industry", SECTORS, index=SECTORS.index("Consumer Staples") if "Consumer Staples" in SECTORS else 0)
